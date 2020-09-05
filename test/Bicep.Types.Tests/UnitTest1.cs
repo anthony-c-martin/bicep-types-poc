@@ -5,6 +5,8 @@ using Bicep.Types.Concrete;
 using System;
 using System.Collections.Generic;
 using FluentAssertions;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Bicep.Types.Tests
 {
@@ -33,6 +35,7 @@ namespace Bicep.Types.Tests
     [TestClass]
     public class UnitTest1
     {
+        /*
         [TestMethod]
         public void TestMethod1()
         {
@@ -58,6 +61,33 @@ namespace Bicep.Types.Tests
             var json2 = TypeSerializer.Serialize(newTypes);
 
             json.Should().Equals(json2);
+        }
+        */
+
+        [TestMethod]
+        public void TestMethod2()
+        {
+            var builtin = new BuiltInType { Kind = BuiltInTypeKind.Int };
+            var array = new ArrayType { Name = "steve", ItemType = new FixedTypeReference(builtin) };
+            /*
+
+            var serializeOptions = new JsonSerializerOptions
+            {
+                IgnoreNullValues = true,
+            };
+            serializeOptions.Converters.Add(new TypeBaseConverter());
+
+            var test = JsonSerializer.Serialize(builtin, serializeOptions);
+            var test2 = JsonSerializer.Deserialize<TypeBase>(test, serializeOptions);
+            */
+
+            var serialized = TypeSerializer.Serialize(new TypeBase[]
+            {
+                builtin,
+                array,
+            });
+
+            var deserialized = TypeSerializer.Deserialize(serialized);
         }
     }
 }

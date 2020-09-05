@@ -6,6 +6,16 @@ namespace Bicep.Types.Concrete
 {
     public class TypeFactory
     {
+        private List<TypeBase> types
+
+        public void AddType(TypeBase type)
+        {
+            
+        }
+    }
+
+    public class TypeFactory
+    {
         private readonly List<TypeBase> allocatedTypes;
 
         private class AllocatedTypeReference : ITypeReference

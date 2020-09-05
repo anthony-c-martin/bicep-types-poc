@@ -15,11 +15,6 @@ namespace Bicep.Types.Concrete
 
     public class BuiltInType : TypeBase
     {
-        public BuiltInType(BuiltInTypeKind kind)
-        {
-            Kind = kind;
-        }
-
-        public BuiltInTypeKind Kind { get; }
+        public BuiltInTypeKind? Kind { get; set; }
     }
 }

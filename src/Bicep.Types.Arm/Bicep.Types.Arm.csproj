@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="generated/**/*.json"  Link="schemas\%(RecursiveDir)%(Filename)%(Extension)" LogicalName="$([System.String]::new('%(RecursiveDir)%(Filename)%(Extension)').Replace($([System.IO.Path]::DirectorySeparatorChar), $([System.IO.Path]::AltDirectorySeparatorChar)).ToLowerInvariant())" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Bicep.Types\Bicep.Types.csproj" />
+  </ItemGroup>
+
+</Project>

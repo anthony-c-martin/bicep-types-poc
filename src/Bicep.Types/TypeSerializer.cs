@@ -1,9 +1,5 @@
-﻿using System;
-using System.IO;
-using System.Linq;
-using System.Text;
+﻿using System.Linq;
 using System.Text.Json;
-using System.Threading.Tasks;
 using Bicep.Types.Concrete;
 using Bicep.Types.Serialized;
 
@@ -18,18 +14,31 @@ namespace Bicep.Types
 
         public static string Serialize(TypeBase[] types)
         {
-            var flatConverter = new ToFlatTypeConverter(types);
-            var flatTypes = types.Select(x => flatConverter.Convert(x)).ToArray();
+            var factory = new TypeFactory(types);
 
-            return JsonSerializer.Serialize(flatTypes, SerializerOptions);
+            var serializeOptions = new JsonSerializerOptions
+            {
+                IgnoreNullValues = true,
+            };
+            serializeOptions.Converters.Add(new TypeBaseConverter(factory));
+
+            return JsonSerializer.Serialize(types, serializeOptions);
         }
 
         public static TypeBase[] Deserialize(string content)
         {
-            var flatTypes = JsonSerializer.Deserialize<FlatType[]>(content, SerializerOptions);
-            var flatConverter = new FromFlatTypeConverter(flatTypes);
+            var factory = new TypeFactory(Enumerable.Empty<TypeBase>());
 
-            return flatTypes.Select(x => flatConverter.Convert(x)).ToArray();
+            var serializeOptions = new JsonSerializerOptions
+            {
+                IgnoreNullValues = true,
+            };
+            serializeOptions.Converters.Add(new TypeBaseConverter(factory));
+
+            var types = JsonSerializer.Deserialize<TypeBase[]>(content, serializeOptions);
+            factory.Hydrate(types);
+
+            return types;
         }
     }
 }

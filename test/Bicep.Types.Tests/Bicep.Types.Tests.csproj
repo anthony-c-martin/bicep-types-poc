@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Bicep.Types\Bicep.Types.csproj" />
+    <ProjectReference Include="..\..\src\Bicep.Types.Arm\Bicep.Types.Arm.csproj" />
   </ItemGroup>
 
 </Project>

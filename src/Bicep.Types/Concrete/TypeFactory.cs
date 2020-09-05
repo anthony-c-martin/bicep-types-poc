@@ -1,42 +1,80 @@
 using System;
 using System.Collections.Generic;
-using Bicep.Types.Serialized;
+using System.Linq;
 
 namespace Bicep.Types.Concrete
 {
     public class TypeFactory
     {
-        private readonly List<TypeBase> allocatedTypes;
-
-        private class AllocatedTypeReference : ITypeReference
+        private class TypeReference : ITypeReference
         {
             private readonly TypeFactory factory;
             private readonly int index;
 
-            public AllocatedTypeReference(int index, TypeFactory factory)
+            public TypeReference(TypeFactory factory, int index)
             {
-                this.index = index;
                 this.factory = factory;
+                this.index = index;
             }
 
-            public TypeBase Type => factory.allocatedTypes[index];
+            public TypeBase Type => factory.types[index]; // TODO check perf on a list index lookup
         }
+        
+        private readonly List<TypeBase> types;
+        private readonly IDictionary<TypeBase, int> typeLookup;
 
-        private TypeFactory()
+        public TypeFactory(IEnumerable<TypeBase> types)
         {
-            allocatedTypes = new List<TypeBase>();
+            this.types = new List<TypeBase>(types);
+            this.typeLookup = Enumerable.Range(0, this.types.Count).ToDictionary(i => this.types[i]);
         }
 
-        public static TypeBase[] FromSerialized(FlatType[] flatTypes)
+        public void Hydrate(IEnumerable<TypeBase> types)
         {
-            var factory = new TypeFactory();
-
-            return factory.allocatedTypes.ToArray();
+            if (this.types.Any() || this.typeLookup.Any())
+            {
+                throw new ArgumentException($"{nameof(Hydrate)} may only be called on an empty factory");
+            }
+            
+            foreach (var type in types)
+            {
+                AddType(type);
+            }
         }
 
-        public static FlatType[] ToSerialized(TypeBase[] types)
+        private int AddType(TypeBase type)
         {
-            return Array.Empty<FlatType>();
+            if (typeLookup.ContainsKey(type))
+            {
+                throw new ArgumentException("Duplicate type added");
+            }
+    
+            var index = types.Count;
+            typeLookup[type] = index;
+            types.Add(type);
+
+            return index;
         }
+
+        public TType Create<TType>(Func<TType> createFunc)
+            where TType : TypeBase
+        {
+            var type = createFunc();
+            AddType(type);
+
+            return type;
+        }
+
+        public ITypeReference GetReference(TypeBase type)
+            => new TypeReference(this, typeLookup[type]);
+
+        public ITypeReference GetReference(int index)
+            => new TypeReference(this, index);
+
+        public int GetIndex(TypeBase type)
+            => typeLookup[type];
+
+        public TypeBase[] GetTypes()
+            => types.ToArray();
     }
 }

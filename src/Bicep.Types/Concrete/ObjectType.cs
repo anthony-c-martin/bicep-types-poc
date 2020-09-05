@@ -4,14 +4,10 @@ namespace Bicep.Types.Concrete
 {
     public class ObjectType : TypeBase
     {
-        public ObjectType(string name, IDictionary<string, ITypeReference> properties)
-        {
-            Name = name;
-            Properties = properties;
-        }
+        public string? Name { get; set; }
 
-        public string Name { get; }
+        public IDictionary<string, ITypeReference>? Properties { get; set; }
 
-        public IDictionary<string, ITypeReference> Properties { get; }
+        public ITypeReference? AdditionalProperties { get; set; }
     }
 }

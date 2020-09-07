@@ -2,15 +2,14 @@ namespace Bicep.Types.Concrete
 {
     public enum BuiltInTypeKind
     {
-        Never = 1,
-        Any = 2,
-        Null = 3,
-        Bool = 4,
-        Int = 5,
-        String = 6,
-        Object = 7,
-        Array = 8,
-        ResourceRef = 9,
+        Any = 1,
+        Null = 2,
+        Bool = 3,
+        Int = 4,
+        String = 5,
+        Object = 6,
+        Array = 7,
+        ResourceRef = 8,
     }
 
     public class BuiltInType : TypeBase

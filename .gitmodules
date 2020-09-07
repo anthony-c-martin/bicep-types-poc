@@ -1,0 +1,4 @@
+[submodule "generator/autorest.common"]
+	path = generator/autorest.common
+	url = https://github.com/azure/autorest.common
+	branch = v3

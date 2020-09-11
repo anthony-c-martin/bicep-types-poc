@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using AutoRest.AzureResourceSchema.Models;
@@ -11,6 +12,8 @@ namespace AutoRest.AzureResourceSchema
     {
         private readonly TypeFactory factory;
         private readonly IReadOnlyDictionary<BuiltInTypeKind, BuiltInType> builtInTypes;
+        private readonly TypeBase apiVersionType;
+        private readonly TypeBase dependsOnType;
         private readonly CodeModel codeModel;
         private readonly ProviderDefinition definition;
         private readonly IDictionary<string, TypeBase> namedDefinitions;
@@ -36,9 +39,32 @@ namespace AutoRest.AzureResourceSchema
                 [BuiltInTypeKind.Array] = factory.Create(() => new BuiltInType { Kind = BuiltInTypeKind.Array }),
                 [BuiltInTypeKind.ResourceRef] = factory.Create(() => new BuiltInType { Kind = BuiltInTypeKind.ResourceRef }),
             };
+            this.apiVersionType = factory.Create(() => new StringLiteralType { Value = definition.ApiVersion });
+            this.dependsOnType = factory.Create(() => new ArrayType { ItemType = factory.GetReference(builtInTypes[BuiltInTypeKind.ResourceRef]) });
             this.codeModel = codeModel;
             this.definition = definition;
             this.namedDefinitions = new Dictionary<string, TypeBase>();
+        }
+
+        private ObjectProperty CreateObjectProperty(TypeBase type, ObjectPropertyFlags flags)
+            => new ObjectProperty
+            {
+                Type = factory.GetReference(type),
+                Flags = flags,
+            };
+
+        private Dictionary<string, ObjectProperty> GetStandardizedResourceProperties(ResourceDescriptor resourceDescriptor)
+        {
+            var type = factory.Create(() => new StringLiteralType { Value = resourceDescriptor.FullyQualifiedType });
+
+            return new Dictionary<string, ObjectProperty>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["id"] = CreateObjectProperty(builtInTypes[BuiltInTypeKind.String], ObjectPropertyFlags.ReadOnly | ObjectPropertyFlags.DeployTimeConstant),
+                ["name"] = CreateObjectProperty(builtInTypes[BuiltInTypeKind.String], ObjectPropertyFlags.Required | ObjectPropertyFlags.DeployTimeConstant),
+                ["type"] = CreateObjectProperty(type, ObjectPropertyFlags.ReadOnly | ObjectPropertyFlags.DeployTimeConstant),
+                ["apiVersion"] = CreateObjectProperty(apiVersionType, ObjectPropertyFlags.ReadOnly | ObjectPropertyFlags.DeployTimeConstant),
+                ["dependsOn"] = CreateObjectProperty(dependsOnType, ObjectPropertyFlags.WriteOnly),
+            };
         }
 
         private GenerateResult Process()
@@ -61,7 +87,7 @@ namespace AutoRest.AzureResourceSchema
                     continue;
                 }
 
-                var resourceProperties = new Dictionary<string, ITypeReference>();
+                var resourceProperties = GetStandardizedResourceProperties(resource.Descriptor);
                 var resourceDefinition = CreateObject(descriptor.FullyQualifiedType, body, resourceProperties);
 
                 resource.Type = factory.Create(() => new ResourceType
@@ -85,7 +111,8 @@ namespace AutoRest.AzureResourceSchema
                     var propertyDefinition = ParseType(property, property.ModelType);
                     if (propertyDefinition != null)
                     {
-                        resourceProperties[property.SerializedName] = factory.GetReference(propertyDefinition);
+                        var flags = ParsePropertyFlags(property);
+                        resourceProperties[property.SerializedName] = CreateObjectProperty(propertyDefinition, flags);
                     }
                 }
 
@@ -137,6 +164,23 @@ namespace AutoRest.AzureResourceSchema
             return (true, string.Empty, CreateConstantResourceName(resource.Descriptor, resNameParam));
         }
 
+        private ObjectPropertyFlags ParsePropertyFlags(Property property)
+        {
+            var flags = ObjectPropertyFlags.None;
+
+            if (property.IsRequired)
+            {
+                flags |= ObjectPropertyFlags.Required;
+            }
+
+            if (property.IsReadOnly)
+            {
+                flags |= ObjectPropertyFlags.ReadOnly;
+            }
+
+            return flags;
+        }
+
         private TypeBase ParseType(Property property, IModelType type)
         {
             // A schema that matches a JSON object with specific properties, such as
@@ -178,7 +222,7 @@ namespace AutoRest.AzureResourceSchema
             return null;
         }
 
-        private TypeBase CreateObject(string definitionName, CompositeType compositeType, Dictionary<string, ITypeReference> properties)
+        private TypeBase CreateObject(string definitionName, CompositeType compositeType, Dictionary<string, ObjectProperty> properties)
         {
             if (compositeType.IsPolymorphic && compositeType.PolymorphicDiscriminator != null)
             {
@@ -204,7 +248,7 @@ namespace AutoRest.AzureResourceSchema
 
             if (!namedDefinitions.ContainsKey(definitionName))
             {
-                var definitionProperties = new Dictionary<string, ITypeReference>();
+                var definitionProperties = new Dictionary<string, ObjectProperty>();
                 var definition = CreateObject(definitionName, compositeType, definitionProperties);
 
                 // This definition must be added to the definition map before we start parsing
@@ -218,7 +262,8 @@ namespace AutoRest.AzureResourceSchema
                     var subPropertyDefinition = ParseType(subProperty, subProperty.ModelType);
                     if (subPropertyDefinition != null)
                     {
-                        definitionProperties[subProperty.SerializedName ?? subProperty.Name.RawValue] = factory.GetReference(subPropertyDefinition);
+                        var flags = ParsePropertyFlags(subProperty);
+                        definitionProperties[subProperty.SerializedName ?? subProperty.Name.RawValue] = CreateObjectProperty(subPropertyDefinition, flags);
                     }
                 }
 
@@ -254,7 +299,11 @@ namespace AutoRest.AzureResourceSchema
                 if (namedDefinitions[subType.Name] is ObjectType objectType)
                 {
                     var discriminatorEnum = factory.Create(() => new StringLiteralType { Value = subType.SerializedName });
-                    objectType.Properties[discriminatedObjectType.Discriminator] = factory.GetReference(discriminatorEnum);
+                    objectType.Properties[discriminatedObjectType.Discriminator] = new ObjectProperty
+                    {
+                        Type = factory.GetReference(discriminatorEnum),
+                        Flags = ObjectPropertyFlags.Required,
+                    };
                 }
 
                 discriminatedObjectType.Elements[subType.SerializedName] = factory.GetReference(polymorphicTypeRef);
@@ -292,7 +341,7 @@ namespace AutoRest.AzureResourceSchema
                 case KnownPrimaryType.Decimal:
                     return builtInTypes[BuiltInTypeKind.Int];
                 case KnownPrimaryType.Object:
-                    return builtInTypes[BuiltInTypeKind.Object];
+                    return builtInTypes[BuiltInTypeKind.Any];
                 case KnownPrimaryType.ByteArray:
                     return builtInTypes[BuiltInTypeKind.Array];
                 case KnownPrimaryType.Base64Url:
@@ -331,97 +380,6 @@ namespace AutoRest.AzureResourceSchema
             {
                 ItemType = factory.GetReference(itemType),
             });
-
-            // todo property.IsReadOnly
         }
-
-/* TODO
-        private ResourceSchema CreateSchema()
-        {
-            var processedSchemas = new Dictionary<string, JsonSchema>(StringComparer.OrdinalIgnoreCase);
-            var resourceDefinitions = new Dictionary<ResourceDescriptor, JsonSchema>(ResourceDescriptor.Comparer);
-
-            // Order by resource type length to process parent resources before child resources
-            var definitionsByDescriptor = definition
-                .ResourceDefinitions.ToLookup(x => x.Descriptor, ResourceDescriptor.Comparer)
-                .OrderBy(grouping => grouping.Key.ResourceTypeSegments.Count);
-
-            foreach (var definitionGrouping in definitionsByDescriptor)
-            {
-                var descriptor = definitionGrouping.Key;
-                var definitions = definitionGrouping.ToArray();
-
-                if (processedSchemas.ContainsKey(descriptor.FullyQualifiedTypeWithScope))
-                {
-                    LogWarning($"Found duplicate definition for type {descriptor.FullyQualifiedType} in scope {descriptor.ScopeType}");
-                    continue;
-                }
-
-                if (definitions.Length > 1 && descriptor.HasVariableName)
-                {
-                    var selectedDefinition = definitions.First();
-
-                    foreach (var definition in definitions.Skip(1))
-                    {
-                        LogWarning($"Found duplicate definition for variable-named type {descriptor.FullyQualifiedType}. Skipping definition with path '{definition.Descriptor.XmsMetadata.path}'.");
-                    }
-                    LogWarning($"Found duplicate definition for variable-named type {descriptor.FullyQualifiedType}. Using definition with path '{selectedDefinition.Descriptor.XmsMetadata.path}'.");
-
-                    definitions = new[] { selectedDefinition };
-                }
-
-                // Add schema to global resources
-                {
-                    JsonSchema schema;
-                    if (definitions.Length == 1)
-                    {
-                        schema = definitions.Single().BaseSchema.Clone();
-
-                        schema.AddPropertyWithOverwrite("name", definitions.Single().Name.NameType.Clone(), true);
-                        schema.AddPropertyWithOverwrite("type", JsonSchema.CreateSingleValuedEnum(descriptor.FullyQualifiedType), true);
-                        schema.AddPropertyWithOverwrite("apiVersion", JsonSchema.CreateSingleValuedEnum(descriptor.ApiVersion), true);
-                    }
-                    else
-                    {
-                        schema = new JsonSchema
-                        {
-                            JsonType = "object",
-                            Description = descriptor.FullyQualifiedType,
-                        };
-
-                        foreach (var definition in definitions)
-                        {
-                            if (!definition.Name.HasConstantName)
-                            {
-                                throw new InvalidOperationException($"Unable to reconcile variable-named resource {descriptor.FullyQualifiedType}");
-                            }
-
-                            var oneOfSchema = definition.BaseSchema.Clone();
-
-                            oneOfSchema.AddPropertyWithOverwrite("name", definition.Name.NameType.Clone(), true);
-
-                            schema.AddOneOf(oneOfSchema);
-                        }
-
-                        schema.AddPropertyWithOverwrite("type", JsonSchema.CreateSingleValuedEnum(descriptor.FullyQualifiedType), true);
-                        schema.AddPropertyWithOverwrite("apiVersion", JsonSchema.CreateSingleValuedEnum(descriptor.ApiVersion), true);
-                    }
-
-                    processedSchemas[descriptor.FullyQualifiedTypeWithScope] = schema;
-                    resourceDefinitions[descriptor] = schema;
-                }
-            }
-
-            return new ResourceSchema
-            {
-                Id = $"https://schema.management.azure.com/schemas/{providerDefinition.ApiVersion}/{providerDefinition.Namespace}.json#",
-                Title = providerDefinition.Namespace,
-                Description = providerDefinition.Namespace.Replace('.', ' ') + " Resource Types",
-                Schema = "http://json-schema.org/draft-04/schema#",
-                Definitions = providerDefinition.SchemaDefinitions,
-                ResourceDefinitions = resourceDefinitions,
-            };
-        }
-        */
     }
 }

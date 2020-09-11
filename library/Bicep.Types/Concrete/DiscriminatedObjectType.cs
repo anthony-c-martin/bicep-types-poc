@@ -8,7 +8,7 @@ namespace Bicep.Types.Concrete
 
         public string? Discriminator { get; set; }
 
-        public IDictionary<string, ITypeReference>? BaseProperties { get; set; }
+        public IDictionary<string, ObjectProperty>? BaseProperties { get; set; }
 
         public IDictionary<string, ITypeReference>? Elements { get; set; }
     }

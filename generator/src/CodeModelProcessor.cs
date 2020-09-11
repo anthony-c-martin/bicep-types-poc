@@ -157,14 +157,16 @@ namespace AutoRest.AzureResourceSchema
 
             var providerDefinitions = new Dictionary<string, ProviderDefinition>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var method in serviceClient.Methods.Where(method => ShouldProcess(serviceClient, method, apiVersion)))
+            foreach (var putMethod in serviceClient.Methods.Where(method => ShouldProcess(serviceClient, method, apiVersion)))
             {
-                var (success, failureReason, resourceDescriptors) = ParseMethod(method, apiVersion);
+                var (success, failureReason, resourceDescriptors) = ParseMethod(putMethod, apiVersion);
                 if (!success)
                 {
-                    LogWarning($"Skipping path '{method.Url}': {failureReason}");
+                    LogWarning($"Skipping path '{putMethod.Url}': {failureReason}");
                     continue;
                 }
+
+                var getMethod = serviceClient.Methods.FirstOrDefault(x => x.Url == putMethod.Url && x.HttpMethod == HttpMethod.Get);
 
                 foreach (var descriptor in resourceDescriptors)
                 {
@@ -182,7 +184,8 @@ namespace AutoRest.AzureResourceSchema
                     providerDefinition.ResourceDefinitions.Add(new ResourceDefinition
                     {
                         Descriptor = descriptor,
-                        DeclaringMethod = method,
+                        DeclaringMethod = putMethod,
+                        GetMethod = getMethod,
                     });
                 }
             }

@@ -9,6 +9,8 @@ namespace AutoRest.AzureResourceSchema.Models
 
         public Method DeclaringMethod { get; set; }
 
+        public Method GetMethod { get; set; }
+
         public ResourceType Type { get; set; }
     }
 }

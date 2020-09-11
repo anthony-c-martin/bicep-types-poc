@@ -8,6 +8,10 @@ pipeline-model: v3
 ``` yaml
 title: none
 
+pass-thru:
+  - subset-reducer
+  - tree-shaker
+
 pipeline:
   azureresourceschema/imodeler2:
     input: openapi-document/multi-api/identity

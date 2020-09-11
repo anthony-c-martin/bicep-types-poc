@@ -14,7 +14,7 @@ const inputBaseDir = path.resolve(`${__dirname}/../../../azure-rest-api-specs`);
 const outputBaseDir = path.resolve(`${__dirname}/../../library/Bicep.Types.Arm/generated`);
 const extensionDir = path.resolve(`${__dirname}/../`);
 const autorestBinary = os.platform() === 'win32' ? 'autorest.cmd' : 'autorest';
-const autorestCoreVersion = '3.0.6306';
+const autorestCoreVersion = '3.0.6318';
 
 executeSynchronous(async () => {
   const readmePaths = await findReadmePaths(inputBaseDir);
@@ -28,17 +28,23 @@ executeSynchronous(async () => {
 });
 
 async function generateSchema(readme: string, outputBaseDir: string) {
-  const autoRestParams = [
-    // `--azureresourceschema.debugger=true`, // uncomment for debugging
+  const debug = false; // change to true for debugging
+  let autoRestParams = [
     `--version=${autorestCoreVersion}`,
     `--use=${extensionDir}`,
     '--azureresourceschema',
     `--output-folder=${outputBaseDir}`,
     `--multiapi`,
-    '--title=none',
-    '--pass-thru:subset-reducer',
     readme,
   ];
+
+  if (debug) {
+    autoRestParams = autoRestParams.concat([
+      `--azureresourceschema.debugger=true`,
+      `--debug`,
+      `--verbose`,
+    ]);
+  }
 
   return await executeCmd(__dirname, autorestBinary, autoRestParams);
 }

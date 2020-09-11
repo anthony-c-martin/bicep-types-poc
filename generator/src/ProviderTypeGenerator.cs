@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Net;
 using AutoRest.AzureResourceSchema.Models;
 using AutoRest.Core.Model;
 using Bicep.Types.Concrete;
@@ -53,14 +54,14 @@ namespace AutoRest.AzureResourceSchema
                 Flags = flags,
             };
 
-        private Dictionary<string, ObjectProperty> GetStandardizedResourceProperties(ResourceDescriptor resourceDescriptor)
+        private Dictionary<string, ObjectProperty> GetStandardizedResourceProperties(ResourceDescriptor resourceDescriptor, TypeBase resourceName)
         {
             var type = factory.Create(() => new StringLiteralType { Value = resourceDescriptor.FullyQualifiedType });
 
             return new Dictionary<string, ObjectProperty>(StringComparer.OrdinalIgnoreCase)
             {
                 ["id"] = CreateObjectProperty(builtInTypes[BuiltInTypeKind.String], ObjectPropertyFlags.ReadOnly | ObjectPropertyFlags.DeployTimeConstant),
-                ["name"] = CreateObjectProperty(builtInTypes[BuiltInTypeKind.String], ObjectPropertyFlags.Required | ObjectPropertyFlags.DeployTimeConstant),
+                ["name"] = CreateObjectProperty(resourceName, ObjectPropertyFlags.Required | ObjectPropertyFlags.DeployTimeConstant),
                 ["type"] = CreateObjectProperty(type, ObjectPropertyFlags.ReadOnly | ObjectPropertyFlags.DeployTimeConstant),
                 ["apiVersion"] = CreateObjectProperty(apiVersionType, ObjectPropertyFlags.ReadOnly | ObjectPropertyFlags.DeployTimeConstant),
                 ["dependsOn"] = CreateObjectProperty(dependsOnType, ObjectPropertyFlags.WriteOnly),
@@ -72,7 +73,10 @@ namespace AutoRest.AzureResourceSchema
             foreach (var resource in definition.ResourceDefinitions)
             {
                 var descriptor = resource.Descriptor;
-                var body = resource.DeclaringMethod.Body?.ModelType as CompositeType;
+                var putBody = resource.DeclaringMethod.Body?.ModelType as CompositeType;
+                var getBody = (resource.GetMethod?.Responses.GetValueOrDefault(HttpStatusCode.OK)?.Body as CompositeType) ?? 
+                    (resource.GetMethod?.DefaultResponse?.Body as CompositeType) ??
+                    putBody;
 
                 var (success, failureReason, resourceName) = ParseNameSchema(resource, definition);
                 if (!success)
@@ -81,14 +85,14 @@ namespace AutoRest.AzureResourceSchema
                     continue;
                 }
 
-                if (body == null)
+                if (putBody == null)
                 {
                     CodeModelProcessor.LogWarning($"Skipping resource type {descriptor.FullyQualifiedType} under path '{resource.DeclaringMethod.Url}': No resource body defined");
                     continue;
                 }
 
-                var resourceProperties = GetStandardizedResourceProperties(resource.Descriptor);
-                var resourceDefinition = CreateObject(descriptor.FullyQualifiedType, body, resourceProperties);
+                var resourceProperties = GetStandardizedResourceProperties(resource.Descriptor, resourceName);
+                var resourceDefinition = CreateObject(descriptor.FullyQualifiedType, putBody, resourceProperties);
 
                 resource.Type = factory.Create(() => new ResourceType
                 { 
@@ -96,29 +100,32 @@ namespace AutoRest.AzureResourceSchema
                     Body = factory.GetReference(resourceDefinition),
                 });
 
-                foreach (var property in body.ComposedProperties)
+                var putProperties = putBody.ComposedProperties
+                    .Where(p => p.SerializedName != null)
+                    .Where(p => !resourceProperties.ContainsKey(p.SerializedName))
+                    .ToDictionary(p => p.SerializedName, StringComparer.OrdinalIgnoreCase);
+
+                var getProperties = getBody.ComposedProperties
+                    .Where(p => p.SerializedName != null)
+                    .Where(p => !resourceProperties.ContainsKey(p.SerializedName))
+                    .ToDictionary(p => p.SerializedName, StringComparer.OrdinalIgnoreCase);
+
+                foreach (var property in putProperties.Keys.Concat(getProperties.Keys.Where(x => !putProperties.ContainsKey(x))))
                 {
-                    if (property.SerializedName == null)
-                    {
-                        continue;
-                    }
+                    var isWritable = putProperties.TryGetValue(property, out var putProperty);
+                    var isReadable = getProperties.TryGetValue(property, out var getProperty);
 
-                    if (resourceProperties.ContainsKey(property.SerializedName))
-                    {
-                        continue;
-                    }
-
-                    var propertyDefinition = ParseType(property, property.ModelType);
+                    var propertyDefinition = ParseType(putProperty?.ModelType, getProperty?.ModelType);
                     if (propertyDefinition != null)
                     {
-                        var flags = ParsePropertyFlags(property);
-                        resourceProperties[property.SerializedName] = CreateObjectProperty(propertyDefinition, flags);
+                        var flags = ParsePropertyFlags(putProperty, getProperty);
+                        resourceProperties[property] = CreateObjectProperty(propertyDefinition, flags);
                     }
                 }
 
                 if (resourceDefinition is DiscriminatedObjectType discriminatedObjectType)
                 {
-                    HandlePolymorphicType(discriminatedObjectType, body);
+                    HandlePolymorphicType(discriminatedObjectType, putBody, getBody);
                 }
             }
 
@@ -150,7 +157,7 @@ namespace AutoRest.AzureResourceSchema
                     return (false, $"Unable to locate parameter with name '{resNameParam}'", null);
                 }
 
-                var nameType = ParseType(param.ClientProperty, param.ModelType);
+                var nameType = ParseType(param.ModelType, param.ModelType);
 
                 return (true, string.Empty, nameType);
             }
@@ -164,73 +171,80 @@ namespace AutoRest.AzureResourceSchema
             return (true, string.Empty, CreateConstantResourceName(resource.Descriptor, resNameParam));
         }
 
-        private ObjectPropertyFlags ParsePropertyFlags(Property property)
+        private ObjectPropertyFlags ParsePropertyFlags(Property putProperty, Property getProperty)
         {
             var flags = ObjectPropertyFlags.None;
 
-            if (property.IsRequired)
+            if (putProperty != null && putProperty.IsRequired)
             {
                 flags |= ObjectPropertyFlags.Required;
             }
 
-            if (property.IsReadOnly)
+            if (putProperty == null || putProperty.IsReadOnly)
             {
                 flags |= ObjectPropertyFlags.ReadOnly;
+            }
+
+            if (getProperty == null)
+            {
+                flags |= ObjectPropertyFlags.WriteOnly;
             }
 
             return flags;
         }
 
-        private TypeBase ParseType(Property property, IModelType type)
+        private TypeBase ParseType(IModelType putType, IModelType getType)
         {
+            var combinedType = putType ?? getType;
+
             // A schema that matches a JSON object with specific properties, such as
             // { "name": { "type": "string" }, "age": { "type": "number" } }
-            if (type is CompositeType compositeType)
+            if (combinedType is CompositeType)
             {
-                return ParseCompositeType(property, compositeType, true);
+                return ParseCompositeType(putType as CompositeType, getType as CompositeType, true);
             } 
             // A schema that matches a "dictionary" JSON object, such as
             // { "additionalProperties": { "type": "string" } }
-            if (type is DictionaryType dictionaryType)
+            if (combinedType is DictionaryType)
             {
-                return ParseDictionaryType(property, dictionaryType);
+                return ParseDictionaryType(putType as DictionaryType, getType as DictionaryType);
             }
             // A schema that matches a single value from a given set of values, such as
             // { "enum": [ "a", "b" ] }
-            if (type is EnumType enumType)
+            if (combinedType is EnumType)
             {
-                return ParseEnumType(property, enumType);
+                return ParseEnumType(putType as EnumType, getType as EnumType);
             }
             // A schema that matches simple values, such as { "type": "number" }
-            if (type is PrimaryType primaryType)
+            if (combinedType is PrimaryType)
             {
-                return ParsePrimaryType(primaryType);
+                return ParsePrimaryType(putType as PrimaryType, getType as PrimaryType);
             }
             // A schema that matches an array of values, such as
             // { "items": { "type": "number" } }
-            if (type is SequenceType sequenceType)
+            if (combinedType is SequenceType)
             {
-                return ParseSequenceType(property, sequenceType);
+                return ParseSequenceType(putType as SequenceType, getType as SequenceType);
             }
             // A schema that matches anything
-            if (type is MultiType)
+            if (combinedType is MultiType)
             {
                 return builtInTypes[BuiltInTypeKind.Any];
             }
-            Debug.Fail("Unrecognized property type: " + type.GetType());
 
+            Debug.Fail("Unrecognized property type: " + combinedType.GetType());
             return null;
         }
 
         private TypeBase CreateObject(string definitionName, CompositeType compositeType, Dictionary<string, ObjectProperty> properties)
         {
-            if (compositeType.IsPolymorphic && compositeType.PolymorphicDiscriminator != null)
+            if (compositeType.IsPolymorphic && compositeType.BasePolymorphicDiscriminator != null)
             {
                 return factory.Create(() => new DiscriminatedObjectType
                 {
                     Name = definitionName,
                     BaseProperties = properties,
-                    Discriminator = compositeType.PolymorphicDiscriminator,
+                    Discriminator = compositeType.BasePolymorphicDiscriminator,
                     Elements = new Dictionary<string, ITypeReference>(),
                 });
             }
@@ -242,43 +256,54 @@ namespace AutoRest.AzureResourceSchema
             });
         }
 
-        private TypeBase ParseCompositeType(Property property, CompositeType compositeType, bool includeBaseModelTypeProperties)
+        private TypeBase ParseCompositeType(CompositeType putType, CompositeType getType, bool includeBaseModelTypeProperties)
         {
-            string definitionName = compositeType.Name;
+            var combinedType = putType ?? getType;
+            var definitionName = combinedType.SerializedName;
 
             if (!namedDefinitions.ContainsKey(definitionName))
             {
                 var definitionProperties = new Dictionary<string, ObjectProperty>();
-                var definition = CreateObject(definitionName, compositeType, definitionProperties);
+                var definition = CreateObject(definitionName, combinedType, definitionProperties);
 
                 // This definition must be added to the definition map before we start parsing
                 // its properties because its properties may recursively reference back to this
                 // definition.
                 namedDefinitions.Add(definitionName, definition);
 
-                var compositeTypeProperties = includeBaseModelTypeProperties ? compositeType.ComposedProperties : compositeType.Properties;
-                foreach (var subProperty in compositeTypeProperties)
+                var putProperties = ((includeBaseModelTypeProperties ? putType?.ComposedProperties : putType?.Properties) ?? Enumerable.Empty<Property>())
+                    .Where(p => p.SerializedName != null)
+                    .ToDictionary(p => p.SerializedName, StringComparer.OrdinalIgnoreCase);
+
+                var getProperties = ((includeBaseModelTypeProperties ? getType?.ComposedProperties : getType?.Properties) ?? Enumerable.Empty<Property>())
+                    .Where(p => p.SerializedName != null)
+                    .ToDictionary(p => p.SerializedName, StringComparer.OrdinalIgnoreCase);
+
+                foreach (var property in putProperties.Keys.Concat(getProperties.Keys.Where(x => !putProperties.ContainsKey(x))))
                 {
-                    var subPropertyDefinition = ParseType(subProperty, subProperty.ModelType);
-                    if (subPropertyDefinition != null)
+                    putProperties.TryGetValue(property, out var putProperty);
+                    getProperties.TryGetValue(property, out var getProperty);
+
+                    var propertyDefinition = ParseType(putProperty?.ModelType, getProperty?.ModelType);
+                    if (propertyDefinition != null)
                     {
-                        var flags = ParsePropertyFlags(subProperty);
-                        definitionProperties[subProperty.SerializedName ?? subProperty.Name.RawValue] = CreateObjectProperty(subPropertyDefinition, flags);
+                        var flags = ParsePropertyFlags(putProperty, getProperty);
+                        definitionProperties[property] = CreateObjectProperty(propertyDefinition, flags);
                     }
                 }
 
                 if (definition is DiscriminatedObjectType discriminatedObjectType)
                 {
-                    HandlePolymorphicType(discriminatedObjectType, compositeType);
+                    HandlePolymorphicType(discriminatedObjectType, putType, getType);
                 }
             }
 
             return namedDefinitions[definitionName];
         }
 
-        private TypeBase ParseDictionaryType(Property property, DictionaryType dictionaryType)
+        private TypeBase ParseDictionaryType(DictionaryType putType, DictionaryType getType)
         {
-            var additionalPropertiesType = ParseType(null, dictionaryType.ValueType);
+            var additionalPropertiesType = ParseType(putType?.ValueType, getType?.ValueType);
 
             return factory.Create(() => new ObjectType
             {
@@ -286,19 +311,40 @@ namespace AutoRest.AzureResourceSchema
             });
         }
 
-        private void HandlePolymorphicType(DiscriminatedObjectType discriminatedObjectType, CompositeType baseType)
+        private StringLiteralType GetDiscriminatorType(CompositeType putType, CompositeType getType)
         {
-            foreach (var subType in codeModel.ModelTypes.Where(type => type.BaseModelType == baseType))
+            var combinedType = putType ?? getType;
+
+            if (!(combinedType.Extensions.TryGetValue("x-ms-discriminator-value", out var ext) && ext is string discriminator && !string.IsNullOrEmpty(discriminator)))
             {
+                // autorest.common sets the SerializedName property to the swagger discriminator
+                discriminator = combinedType.SerializedName;
+            }
+
+            return factory.Create(() => new StringLiteralType { Value = discriminator });
+        }
+
+        private void HandlePolymorphicType(DiscriminatedObjectType discriminatedObjectType, CompositeType putType, CompositeType getType)
+        {
+            var putSubTypes = (putType != null ? codeModel.ModelTypes.Where(type => type.BaseModelType == putType) : Enumerable.Empty<CompositeType>())
+                .ToDictionary(x => x.SerializedName);
+            var getSubTypes = (getType != null ? codeModel.ModelTypes.Where(type => type.BaseModelType == getType) : Enumerable.Empty<CompositeType>())
+                .ToDictionary(x => x.SerializedName);
+
+            foreach (var subTypeName in putSubTypes.Keys.Concat(getSubTypes.Keys.Where(x => !putSubTypes.ContainsKey(x))))
+            {
+                putSubTypes.TryGetValue(subTypeName, out var putSubType);
+                getSubTypes.TryGetValue(subTypeName, out var getSubType);
+
                 // Sub-types are never referenced directly in the Swagger
                 // discriminator scenario, so they wouldn't be added to the
                 // produced resource schema. By calling ParseCompositeType() on the
                 // sub-type we add the sub-type to the resource schema.
-                var polymorphicTypeRef = ParseCompositeType(null, subType, false);
+                var polymorphicType = ParseCompositeType(putSubType, getSubType, false);
 
-                if (namedDefinitions[subType.Name] is ObjectType objectType)
+                if (namedDefinitions[subTypeName] is ObjectType objectType)
                 {
-                    var discriminatorEnum = factory.Create(() => new StringLiteralType { Value = subType.SerializedName });
+                    var discriminatorEnum = GetDiscriminatorType(putSubType, getSubType);
                     objectType.Properties[discriminatedObjectType.Discriminator] = new ObjectProperty
                     {
                         Type = factory.GetReference(discriminatorEnum),
@@ -306,15 +352,16 @@ namespace AutoRest.AzureResourceSchema
                     };
                 }
 
-                discriminatedObjectType.Elements[subType.SerializedName] = factory.GetReference(polymorphicTypeRef);
+                discriminatedObjectType.Elements[subTypeName] = factory.GetReference(polymorphicType);
             }
         }
 
-        private TypeBase ParseEnumType(Property property, EnumType enumType)
+        private TypeBase ParseEnumType(EnumType putType, EnumType getType)
         {
+            var combinedType = putType ?? getType;
             var enumTypes = new List<TypeBase>();
 
-            foreach (var enumValue in enumType.Values)
+            foreach (var enumValue in combinedType.Values)
             {
                 var stringLiteralType = factory.Create(() => new StringLiteralType { Value = enumValue.SerializedName });
                 enumTypes.Add(stringLiteralType);
@@ -328,9 +375,11 @@ namespace AutoRest.AzureResourceSchema
             return factory.Create(() => new UnionType { Elements = enumTypes.Select(x => factory.GetReference(x)).ToArray() });
         }
 
-        private TypeBase ParsePrimaryType(PrimaryType primaryType)
+        private TypeBase ParsePrimaryType(PrimaryType putType, PrimaryType getType)
         {
-            switch (primaryType.KnownPrimaryType)
+            var combinedType = putType ?? getType;
+
+            switch (combinedType.KnownPrimaryType)
             {
                 case KnownPrimaryType.Boolean:
                     return builtInTypes[BuiltInTypeKind.Bool];
@@ -350,9 +399,10 @@ namespace AutoRest.AzureResourceSchema
                 case KnownPrimaryType.String:
                 case KnownPrimaryType.TimeSpan:
                 case KnownPrimaryType.Uuid:
+                case KnownPrimaryType.DateTimeRfc1123:
                     return builtInTypes[BuiltInTypeKind.String];
                 default:
-                    Debug.Assert(false, "Unrecognized known property type: " + primaryType.KnownPrimaryType);
+                    Debug.Assert(false, "Unrecognized known property type: " + combinedType.KnownPrimaryType);
                     return builtInTypes[BuiltInTypeKind.Any];
             }
         }
@@ -367,9 +417,9 @@ namespace AutoRest.AzureResourceSchema
             return builtInTypes[BuiltInTypeKind.String];
         }
 
-        private TypeBase ParseSequenceType(Property property, SequenceType sequenceType)
+        private TypeBase ParseSequenceType(SequenceType putType, SequenceType getType)
         {
-            var itemType = ParseType(null, sequenceType.ElementType);
+            var itemType = ParseType(putType?.ElementType, getType?.ElementType);
 
             if (itemType == null)
             {

@@ -25,6 +25,8 @@ executeSynchronous(async () => {
       console.log(e);
     }
   }
+
+  await executeCmd(`${__dirname}/../`, 'dotnet', ['./BicepTypeGenerator.IndexBuilder/bin/Debug/netcoreapp2.0/BicepTypeGenerator.IndexBuilder.dll', outputBaseDir]);
 });
 
 async function generateSchema(readme: string, outputBaseDir: string) {

@@ -96,7 +96,7 @@ namespace AutoRest.AzureResourceSchema
 
                 resource.Type = factory.Create(() => new ResourceType
                 { 
-                    Name = descriptor.FullyQualifiedType,
+                    Name = $"{descriptor.FullyQualifiedType}@{descriptor.ApiVersion}",
                     Body = factory.GetReference(resourceDefinition),
                 });
 

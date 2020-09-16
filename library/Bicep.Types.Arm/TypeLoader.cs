@@ -8,7 +8,7 @@ namespace Bicep.Types.Arm
     public static class TypeLoader
     {
         private static string GetTypeContainerResourceName(string providerNamespace, string apiVersion)
-            => $"{providerNamespace}{Path.AltDirectorySeparatorChar}{apiVersion}{Path.AltDirectorySeparatorChar}types.json".ToLowerInvariant();
+            => $"{providerNamespace}/{apiVersion}/types.json".ToLowerInvariant();
 
         public static IEnumerable<TypeBase> LoadTypes(string providerNamespace, string apiVersion)
         {

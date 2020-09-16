@@ -5,7 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="generated/**/*.json"  Link="schemas\%(RecursiveDir)%(Filename)%(Extension)" LogicalName="$([System.String]::new('%(RecursiveDir)%(Filename)%(Extension)').Replace($([System.IO.Path]::DirectorySeparatorChar), $([System.IO.Path]::AltDirectorySeparatorChar)).ToLowerInvariant())" />
+    <EmbeddedResource Include="generated/**/*.json"  LogicalName="$([System.String]::new('%(RecursiveDir)%(Filename)%(Extension)').Replace('\', '/').ToLowerInvariant())" />
   </ItemGroup>
 
   <ItemGroup>

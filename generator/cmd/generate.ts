@@ -14,7 +14,7 @@ const inputBaseDir = path.resolve(`${__dirname}/../../../azure-rest-api-specs`);
 const outputBaseDir = path.resolve(`${__dirname}/../../library/Bicep.Types.Arm/generated`);
 const extensionDir = path.resolve(`${__dirname}/../`);
 const autorestBinary = os.platform() === 'win32' ? 'autorest.cmd' : 'autorest';
-const autorestCoreVersion = '3.0.6318';
+const autorestCoreVersion = '3.0.6320';
 
 executeSynchronous(async () => {
   const readmePaths = await findReadmePaths(inputBaseDir);
